@@ -1,0 +1,9 @@
+# Video Analysis - Tech Challenge FIAP Fase 4
+
+opencv-python>=4.8.0
+numpy>=1.24.0
+mediapipe>=0.10.0
+tqdm>=4.65.0
+fpdf2>=2.7.0
+deepface>=0.0.89
+tf-keras>=2.16.0
