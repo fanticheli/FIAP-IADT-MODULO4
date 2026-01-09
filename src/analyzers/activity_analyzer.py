@@ -1,386 +1,290 @@
 """
-Analisador de atividades usando MediaPipe Pose Landmarker (Tasks API).
+Analisador de atividades usando MoViNet (Mobile Video Networks).
+Detecta 600 acoes humanas do dataset Kinetics-600.
 """
-import math
-from collections import deque
 import numpy as np
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
+import tensorflow as tf
+import tensorflow_hub as hub
+import pathlib
 
 from src.analyzers.base_analyzer import BaseAnalyzer
 from src.models.detection import ActivityDetection
 from src.utils.logger import logger
 
 
-# Traducao das atividades para portugues
-ACTIVITY_LABELS = {
-    "standing": "Em pe",
+def _load_kinetics_600_labels() -> list[str]:
+    """Carrega as 600 classes do Kinetics-600."""
+    try:
+        labels_path = tf.keras.utils.get_file(
+            fname='kinetics_600_labels.txt',
+            origin='https://raw.githubusercontent.com/tensorflow/models/f8af2291cced43fc9f1d9b41ddbf772ae7b0d7d2/official/projects/movinet/files/kinetics_600_labels.txt'
+        )
+        labels_path = pathlib.Path(labels_path)
+        lines = labels_path.read_text().splitlines()
+        return [line.strip() for line in lines]
+    except Exception as e:
+        logger.warning(f"Erro ao carregar labels: {e}")
+        return []
+
+
+# Mapeamento das principais classes do Kinetics-400 para portugues
+# (as mais comuns/relevantes)
+ACTIVITY_LABELS_PT = {
+    "dancing": "Dancando",
+    "dancing ballet": "Dancando ballet",
+    "dancing gangnam style": "Dancando gangnam style",
+    "breakdancing": "Breakdancing",
+    "salsa dancing": "Dancando salsa",
+    "robot dancing": "Dancando robo",
+    "belly dancing": "Danca do ventre",
+    "zumba": "Zumba",
+    "applauding": "Aplaudindo",
+    "clapping": "Batendo palmas",
+    "waving hand": "Acenando",
+    "hugging": "Abracando",
+    "kissing": "Beijando",
+    "shaking hands": "Apertando maos",
+    "laughing": "Rindo",
+    "crying": "Chorando",
+    "yawning": "Bocejando",
+    "sneezing": "Espirrando",
+    "sticking tongue out": "Mostrando a lingua",
+    "headbanging": "Headbanging",
+    "singing": "Cantando",
+    "beatboxing": "Beatbox",
+    "whistling": "Assobiando",
+    "talking": "Falando",
+    "reading book": "Lendo livro",
+    "reading newspaper": "Lendo jornal",
+    "writing": "Escrevendo",
+    "drawing": "Desenhando",
+    "texting": "Digitando",
+    "using computer": "Usando computador",
+    "playing video games": "Jogando videogame",
+    "using remote controller (not gaming)": "Usando controle remoto",
+    "playing guitar": "Tocando violao",
+    "playing piano": "Tocando piano",
+    "playing drums": "Tocando bateria",
+    "playing violin": "Tocando violino",
+    "playing flute": "Tocando flauta",
+    "playing accordion": "Tocando acordeao",
+    "drumming fingers": "Tamborilar dedos",
+    "cooking": "Cozinhando",
+    "cooking egg": "Fritando ovo",
+    "cooking chicken": "Cozinhando frango",
+    "making a sandwich": "Fazendo sanduiche",
+    "making pizza": "Fazendo pizza",
+    "making sushi": "Fazendo sushi",
+    "making tea": "Fazendo cha",
+    "making a cake": "Fazendo bolo",
+    "baking cookies": "Assando biscoitos",
+    "eating": "Comendo",
+    "eating burger": "Comendo hamburguer",
+    "eating pizza": "Comendo pizza",
+    "eating ice cream": "Comendo sorvete",
+    "drinking": "Bebendo",
+    "drinking beer": "Bebendo cerveja",
+    "drinking shots": "Bebendo shots",
+    "tasting food": "Provando comida",
+    "running": "Correndo",
+    "jogging": "Corrida leve",
+    "walking": "Andando",
+    "walking the dog": "Passeando com cachorro",
+    "jumping": "Pulando",
+    "jumping into pool": "Pulando na piscina",
+    "swimming": "Nadando",
+    "diving": "Mergulhando",
+    "surfing water": "Surfando",
+    "skiing": "Esquiando",
+    "snowboarding": "Snowboard",
+    "skateboarding": "Andando de skate",
+    "riding a bike": "Andando de bicicleta",
+    "motorcycling": "Andando de moto",
+    "driving car": "Dirigindo",
+    "exercising": "Exercitando",
+    "doing aerobics": "Fazendo aerobica",
+    "yoga": "Yoga",
+    "stretching": "Alongando",
+    "push up": "Flexao",
+    "pull ups": "Barra",
+    "situp": "Abdominal",
+    "squat": "Agachamento",
+    "deadlifting": "Levantamento terra",
+    "bench pressing": "Supino",
+    "punching bag": "Socando saco",
+    "punching person (boxing)": "Boxeando",
+    "wrestling": "Lutando",
+    "playing basketball": "Jogando basquete",
+    "playing soccer": "Jogando futebol",
+    "playing tennis": "Jogando tenis",
+    "playing volleyball": "Jogando volei",
+    "golf": "Golfe",
+    "bowling": "Boliche",
+    "archery": "Arco e flecha",
+    "cleaning": "Limpando",
+    "cleaning floor": "Limpando chao",
+    "cleaning windows": "Limpando janelas",
+    "washing dishes": "Lavando louca",
+    "washing hands": "Lavando maos",
+    "ironing": "Passando roupa",
+    "folding clothes": "Dobrando roupas",
+    "making bed": "Arrumando cama",
+    "brushing teeth": "Escovando dentes",
+    "brushing hair": "Escovando cabelo",
+    "cutting hair": "Cortando cabelo",
+    "shaving": "Fazendo barba",
+    "applying cream": "Passando creme",
+    "doing nails": "Fazendo unhas",
+    "taking a shower": "Tomando banho",
+    "sleeping": "Dormindo",
     "sitting": "Sentado",
-    "arms_raised": "Bracos levantados",
-    "leaning": "Inclinado",
+    "standing": "Em pe",
+    "waiting in line": "Esperando na fila",
+    "presenting": "Apresentando",
+    "news anchoring": "Apresentando jornal",
+    "testifying": "Testemunhando",
+    "sign language interpreting": "Interpretando libras",
+    "celebrating": "Comemorando",
+    "opening present": "Abrindo presente",
+    "blowing out candles": "Apagando velas",
+    "throwing confetti": "Jogando confete",
 }
 
-# Indices dos landmarks de pose
-# https://developers.google.com/mediapipe/solutions/vision/pose_landmarker
-NOSE = 0
-LEFT_SHOULDER = 11
-RIGHT_SHOULDER = 12
-LEFT_ELBOW = 13
-RIGHT_ELBOW = 14
-LEFT_WRIST = 15
-RIGHT_WRIST = 16
-LEFT_HIP = 23
-RIGHT_HIP = 24
-LEFT_KNEE = 25
-RIGHT_KNEE = 26
-LEFT_ANKLE = 27
-RIGHT_ANKLE = 28
-
-# Visibilidade minima para considerar um landmark confiavel
-MIN_VISIBILITY = 0.5
-
-# Tamanho do historico para suavizacao temporal
-SMOOTHING_WINDOW = 5
-
-# Limiares para deteccao de anomalias
-VELOCITY_THRESHOLD = 0.15  # Movimento brusco se velocidade > 15% do frame
-EXTREME_ANGLE_MIN = 30  # Angulo muito fechado (graus)
-EXTREME_ANGLE_MAX = 160  # Angulo muito aberto (graus)
-TRUNK_LEAN_THRESHOLD = 45  # Inclinacao extrema do tronco (graus)
+# Classes do Kinetics-600 serao carregadas dinamicamente
+KINETICS_600_LABELS = None
 
 
 class ActivityAnalyzer(BaseAnalyzer):
     """
-    Analisador de atividades usando MediaPipe Pose Landmarker.
+    Analisador de atividades usando MoViNet (Mobile Video Networks).
 
-    Detecta atividades basicas: em pe, sentado, bracos levantados, inclinado.
+    Detecta 600 acoes humanas do dataset Kinetics-600 usando um modelo
+    de video pre-treinado que considera contexto temporal.
     """
 
-    # URL do modelo - usando FULL para maior precisao
-    MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task"
-    MODEL_NAME = "pose_landmarker_full.task"
+    # URL do modelo MoViNet-A2 (equilibrio entre precisao e velocidade)
+    MODEL_URL = "https://tfhub.dev/tensorflow/movinet/a2/base/kinetics-600/classification/3"
 
-    def __init__(self, min_detection_confidence: float = 0.5):
+    # Numero de frames para acumular antes de fazer predicao
+    FRAMES_PER_PREDICTION = 8
+
+    # Tamanho do frame para o modelo
+    INPUT_SIZE = (224, 224)
+
+    # Confianca minima para considerar uma acao detectada
+    MIN_CONFIDENCE = 0.15
+
+    def __init__(self, min_detection_confidence: float = 0.15):
         self._min_confidence = min_detection_confidence
-        self._landmarker = None
+        self._model = None
+        self._model_signature = None
+        self._labels = []
         self._activity_counter = 0
-        self._activity_history: deque = deque(maxlen=SMOOTHING_WINDOW)
-        self._prev_landmarks = None  # Landmarks do frame anterior para calcular velocidade
+        self._frame_buffer = []
+        self._last_prediction = None
+        self._last_confidence = 0.0
 
     @property
     def name(self) -> str:
         return "activity_detection"
 
-    def _get_model_path(self) -> str:
-        """Obtém o caminho do modelo ou baixa se necessário."""
-        import urllib.request
-        from pathlib import Path
-
-        # Diretório para armazenar o modelo
-        model_dir = Path(__file__).parent.parent.parent / "models"
-        model_dir.mkdir(exist_ok=True)
-        model_path = model_dir / self.MODEL_NAME
-
-        if not model_path.exists():
-            logger.info("Baixando modelo de pose...")
-            urllib.request.urlretrieve(self.MODEL_URL, model_path)
-            logger.info(f"Modelo salvo em: {model_path}")
-
-        return str(model_path)
-
     def setup(self) -> None:
-        """Inicializa o detector de pose."""
+        """Inicializa o modelo MoViNet."""
+        global KINETICS_600_LABELS
+
         self._activity_counter = 0
-        self._activity_history.clear()
-        self._prev_landmarks = None
+        self._frame_buffer = []
+        self._last_prediction = None
+        self._last_confidence = 0.0
 
-        # Configura o landmarker
-        base_options = python.BaseOptions(
-            model_asset_path=self._get_model_path()
-        )
-        options = vision.PoseLandmarkerOptions(
-            base_options=base_options,
-            min_pose_detection_confidence=self._min_confidence,
-            min_tracking_confidence=0.5
-        )
-        self._landmarker = vision.PoseLandmarker.create_from_options(options)
+        logger.info("Carregando modelo MoViNet (pode demorar na primeira vez)...")
+        try:
+            # Carrega o modelo
+            self._model = hub.load(self.MODEL_URL)
+            # Usa a signature para inferencia
+            self._model_signature = self._model.signatures['serving_default']
 
-        logger.info("ActivityAnalyzer inicializado (MediaPipe Pose Full)")
+            # Carrega as labels do Kinetics-600
+            if KINETICS_600_LABELS is None:
+                KINETICS_600_LABELS = _load_kinetics_600_labels()
+            self._labels = KINETICS_600_LABELS
 
-    def _calculate_angle(self, p1, p2, p3) -> float:
+            logger.info(f"ActivityAnalyzer inicializado (MoViNet-A2, {len(self._labels)} classes)")
+        except Exception as e:
+            logger.error(f"Erro ao carregar MoViNet: {e}")
+            logger.info("Usando fallback sem modelo de atividades")
+            self._model = None
+            self._model_signature = None
+
+    def _preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Preprocessa um frame para o modelo."""
+        import cv2
+
+        # Redimensiona para o tamanho esperado
+        resized = cv2.resize(frame, self.INPUT_SIZE)
+
+        # Converte BGR para RGB
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+
+        # Normaliza para [0, 1]
+        normalized = rgb.astype(np.float32) / 255.0
+
+        return normalized
+
+    def _predict_activity(self) -> tuple[str, float]:
         """
-        Calcula o angulo entre tres pontos (em graus).
-        O angulo e formado em p2.
-        """
-        # Vetores
-        v1 = (p1.x - p2.x, p1.y - p2.y)
-        v2 = (p3.x - p2.x, p3.y - p2.y)
-
-        # Produto escalar e magnitudes
-        dot = v1[0] * v2[0] + v1[1] * v2[1]
-        mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
-        mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
-
-        if mag1 * mag2 == 0:
-            return 0.0
-
-        # Angulo em graus
-        cos_angle = max(-1, min(1, dot / (mag1 * mag2)))
-        return math.degrees(math.acos(cos_angle))
-
-    def _is_visible(self, *landmarks) -> bool:
-        """Verifica se todos os landmarks tem visibilidade suficiente."""
-        return all(lm.visibility >= MIN_VISIBILITY for lm in landmarks)
-
-    def _get_smoothed_activity(self, current_activity: str) -> str:
-        """
-        Aplica suavizacao temporal usando votacao por maioria.
-        Evita 'flickering' entre classificacoes.
-        """
-        self._activity_history.append(current_activity)
-
-        if len(self._activity_history) < 3:
-            return current_activity
-
-        # Conta ocorrencias de cada atividade no historico
-        counts = {}
-        for act in self._activity_history:
-            counts[act] = counts.get(act, 0) + 1
-
-        # Retorna a atividade mais frequente
-        return max(counts, key=counts.get)
-
-    def _calculate_landmarks_velocity(self, landmarks) -> float:
-        """
-        Calcula a velocidade media dos landmarks entre o frame atual e o anterior.
-        Retorna um valor normalizado (0.0 a 1.0+).
-        """
-        if self._prev_landmarks is None:
-            return 0.0
-
-        total_displacement = 0.0
-        valid_points = 0
-
-        # Pontos principais para medir movimento
-        key_points = [NOSE, LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP,
-                      LEFT_WRIST, RIGHT_WRIST, LEFT_KNEE, RIGHT_KNEE]
-
-        for idx in key_points:
-            curr = landmarks[idx]
-            prev = self._prev_landmarks[idx]
-
-            # Só considera pontos com boa visibilidade em ambos os frames
-            if curr.visibility >= MIN_VISIBILITY and prev.visibility >= MIN_VISIBILITY:
-                dx = curr.x - prev.x
-                dy = curr.y - prev.y
-                displacement = math.sqrt(dx**2 + dy**2)
-                total_displacement += displacement
-                valid_points += 1
-
-        if valid_points == 0:
-            return 0.0
-
-        return total_displacement / valid_points
-
-    def _calculate_body_angles(self, landmarks) -> dict:
-        """
-        Calcula angulos corporais importantes para detectar poses atipicas.
-        """
-        angles = {}
-
-        # Angulo do tronco (inclinacao lateral/frontal)
-        left_shoulder = landmarks[LEFT_SHOULDER]
-        right_shoulder = landmarks[RIGHT_SHOULDER]
-        left_hip = landmarks[LEFT_HIP]
-        right_hip = landmarks[RIGHT_HIP]
-
-        if self._is_visible(left_shoulder, right_shoulder, left_hip, right_hip):
-            # Centro dos ombros e quadril
-            shoulder_center_x = (left_shoulder.x + right_shoulder.x) / 2
-            shoulder_center_y = (left_shoulder.y + right_shoulder.y) / 2
-            hip_center_x = (left_hip.x + right_hip.x) / 2
-            hip_center_y = (left_hip.y + right_hip.y) / 2
-
-            # Angulo do tronco em relacao a vertical
-            dx = shoulder_center_x - hip_center_x
-            dy = shoulder_center_y - hip_center_y
-
-            if abs(dy) > 0.01:
-                trunk_angle = abs(math.degrees(math.atan(dx / dy)))
-                angles["trunk"] = trunk_angle
-
-        # Angulo do cotovelo esquerdo
-        left_elbow = landmarks[LEFT_ELBOW]
-        left_wrist = landmarks[LEFT_WRIST]
-        if self._is_visible(left_shoulder, left_elbow, left_wrist):
-            angles["left_elbow"] = self._calculate_angle(left_shoulder, left_elbow, left_wrist)
-
-        # Angulo do cotovelo direito
-        right_elbow = landmarks[RIGHT_ELBOW]
-        right_wrist = landmarks[RIGHT_WRIST]
-        if self._is_visible(right_shoulder, right_elbow, right_wrist):
-            angles["right_elbow"] = self._calculate_angle(right_shoulder, right_elbow, right_wrist)
-
-        # Angulo do joelho esquerdo
-        left_knee = landmarks[LEFT_KNEE]
-        left_ankle = landmarks[LEFT_ANKLE]
-        if self._is_visible(left_hip, left_knee, left_ankle):
-            angles["left_knee"] = self._calculate_angle(left_hip, left_knee, left_ankle)
-
-        # Angulo do joelho direito
-        right_knee = landmarks[RIGHT_KNEE]
-        right_ankle = landmarks[RIGHT_ANKLE]
-        if self._is_visible(right_hip, right_knee, right_ankle):
-            angles["right_knee"] = self._calculate_angle(right_hip, right_knee, right_ankle)
-
-        return angles
-
-    def _detect_anomaly(self, velocity: float, angles: dict) -> tuple[bool, str]:
-        """
-        Detecta se ha anomalia no movimento ou pose.
+        Faz predicao de atividade usando os frames acumulados.
 
         Returns:
-            Tupla (is_anomaly, anomaly_type)
+            Tupla (activity_name, confidence)
         """
-        anomalies = []
+        if self._model_signature is None or len(self._frame_buffer) < 2:
+            return "unknown", 0.0
 
-        # 1. Movimento brusco (velocidade alta)
-        if velocity > VELOCITY_THRESHOLD:
-            anomalies.append(f"Movimento brusco (vel={velocity:.2f})")
+        try:
+            # Empilha frames em um tensor [1, T, H, W, C]
+            frames = np.stack(self._frame_buffer, axis=0)
+            frames = np.expand_dims(frames, axis=0)  # Adiciona dimensao do batch
 
-        # 2. Pose atipica - tronco muito inclinado
-        if "trunk" in angles and angles["trunk"] > TRUNK_LEAN_THRESHOLD:
-            anomalies.append(f"Tronco inclinado ({angles['trunk']:.0f}°)")
+            # Converte para tensor TensorFlow
+            input_tensor = tf.constant(frames, dtype=tf.float32)
 
-        # 3. Pose atipica - angulos extremos nos membros
-        for joint in ["left_elbow", "right_elbow", "left_knee", "right_knee"]:
-            if joint in angles:
-                angle = angles[joint]
-                if angle < EXTREME_ANGLE_MIN:
-                    joint_name = joint.replace("_", " ").title()
-                    anomalies.append(f"{joint_name} muito dobrado ({angle:.0f}°)")
-                elif angle > EXTREME_ANGLE_MAX:
-                    joint_name = joint.replace("_", " ").title()
-                    anomalies.append(f"{joint_name} hiperestendido ({angle:.0f}°)")
+            # Faz predicao usando a signature
+            output = self._model_signature(image=input_tensor)
+            logits = output['classifier_head'][0]
 
-        if anomalies:
-            return True, "; ".join(anomalies)
+            # Aplica softmax para obter probabilidades
+            probabilities = tf.nn.softmax(logits, axis=-1)
 
-        return False, ""
+            # Pega a classe com maior probabilidade
+            top_class = int(tf.argmax(probabilities, axis=-1).numpy())
+            confidence = float(probabilities[top_class].numpy())
 
-    def _classify_activity(self, landmarks) -> tuple[str, float]:
-        """
-        Classifica a atividade baseado nos landmarks da pose.
-        Usa angulos e proporcoes para maior precisao.
+            # Mapeia para o nome da classe
+            if self._labels and top_class < len(self._labels):
+                activity = self._labels[top_class]
+            else:
+                activity = f"action_{top_class}"
 
-        Returns:
-            Tupla (activity_key, confidence)
-        """
-        # Pontos importantes
-        nose = landmarks[NOSE]
-        left_shoulder = landmarks[LEFT_SHOULDER]
-        right_shoulder = landmarks[RIGHT_SHOULDER]
-        left_elbow = landmarks[LEFT_ELBOW]
-        right_elbow = landmarks[RIGHT_ELBOW]
-        left_wrist = landmarks[LEFT_WRIST]
-        right_wrist = landmarks[RIGHT_WRIST]
-        left_hip = landmarks[LEFT_HIP]
-        right_hip = landmarks[RIGHT_HIP]
-        left_knee = landmarks[LEFT_KNEE]
-        right_knee = landmarks[RIGHT_KNEE]
-        left_ankle = landmarks[LEFT_ANKLE]
-        right_ankle = landmarks[RIGHT_ANKLE]
+            return activity, confidence
 
-        # Calcula visibilidade media dos landmarks principais
-        core_landmarks = [left_shoulder, right_shoulder, left_hip, right_hip]
-        visibility = sum(lm.visibility for lm in core_landmarks) / len(core_landmarks)
+        except Exception as e:
+            logger.debug(f"Erro na predicao: {e}")
+            return "unknown", 0.0
 
-        # Se visibilidade muito baixa, retorna standing como fallback
-        if visibility < MIN_VISIBILITY:
-            return "standing", visibility
+    def _get_portuguese_label(self, activity: str) -> str:
+        """Retorna o label em portugues para a atividade."""
+        # Tenta encontrar traducao exata
+        if activity in ACTIVITY_LABELS_PT:
+            return ACTIVITY_LABELS_PT[activity]
 
-        # === DETECCAO DE BRACOS LEVANTADOS ===
-        # Verifica se os pulsos estao acima dos ombros E cotovelos
-        arms_raised = False
-        if self._is_visible(left_wrist, left_shoulder, left_elbow):
-            left_arm_up = left_wrist.y < left_shoulder.y and left_wrist.y < left_elbow.y
-        else:
-            left_arm_up = False
+        # Tenta encontrar traducao parcial
+        for key, value in ACTIVITY_LABELS_PT.items():
+            if key in activity or activity in key:
+                return value
 
-        if self._is_visible(right_wrist, right_shoulder, right_elbow):
-            right_arm_up = right_wrist.y < right_shoulder.y and right_wrist.y < right_elbow.y
-        else:
-            right_arm_up = False
-
-        # Pelo menos um braco levantado significativamente
-        if left_arm_up or right_arm_up:
-            # Calcula angulo do braco em relacao ao corpo
-            if left_arm_up and self._is_visible(left_wrist, left_shoulder, left_hip):
-                angle = self._calculate_angle(left_wrist, left_shoulder, left_hip)
-                if angle > 120:  # Braco bem levantado
-                    arms_raised = True
-
-            if right_arm_up and self._is_visible(right_wrist, right_shoulder, right_hip):
-                angle = self._calculate_angle(right_wrist, right_shoulder, right_hip)
-                if angle > 120:  # Braco bem levantado
-                    arms_raised = True
-
-        if arms_raised:
-            return "arms_raised", visibility
-
-        # === DETECCAO DE SENTADO ===
-        # Usa angulo do joelho: sentado tem joelho mais dobrado (angulo menor)
-        sitting = False
-
-        if self._is_visible(left_hip, left_knee, left_ankle):
-            left_knee_angle = self._calculate_angle(left_hip, left_knee, left_ankle)
-            left_sitting = left_knee_angle < 120  # Joelho dobrado
-        else:
-            left_sitting = False
-
-        if self._is_visible(right_hip, right_knee, right_ankle):
-            right_knee_angle = self._calculate_angle(right_hip, right_knee, right_ankle)
-            right_sitting = right_knee_angle < 120  # Joelho dobrado
-        else:
-            right_sitting = False
-
-        # Tambem verifica a relacao de altura quadril-joelho
-        hip_y = (left_hip.y + right_hip.y) / 2
-        knee_y = (left_knee.y + right_knee.y) / 2
-        hip_knee_ratio = abs(knee_y - hip_y)
-
-        # Sentado: joelhos dobrados OU joelhos na mesma altura do quadril
-        if (left_sitting and right_sitting) or hip_knee_ratio < 0.08:
-            sitting = True
-
-        if sitting:
-            return "sitting", visibility
-
-        # === DETECCAO DE INCLINADO ===
-        # Calcula inclinacao do tronco usando ombros e quadril
-        shoulder_y = (left_shoulder.y + right_shoulder.y) / 2
-        shoulder_x = (left_shoulder.x + right_shoulder.x) / 2
-        hip_x = (left_hip.x + right_hip.x) / 2
-
-        # Angulo do tronco em relacao a vertical
-        trunk_height = hip_y - shoulder_y
-        trunk_horizontal = abs(hip_x - shoulder_x)
-
-        # Se a diferenca horizontal for significativa em relacao a altura
-        if trunk_height > 0.05:  # Evita divisao por valores muito pequenos
-            lean_ratio = trunk_horizontal / trunk_height
-            if lean_ratio > 0.3:  # Inclinacao significativa
-                return "leaning", visibility
-
-        # Tambem detecta inclinacao quando o nariz esta muito a frente
-        if self._is_visible(nose):
-            nose_hip_horizontal = abs(nose.x - hip_x)
-            if nose_hip_horizontal > 0.15:
-                return "leaning", visibility
-
-        # === DEFAULT: EM PE ===
-        return "standing", visibility
+        # Formata o nome em ingles de forma legivel
+        return activity.replace("_", " ").title()
 
     def analyze(
         self,
@@ -399,58 +303,49 @@ class ActivityAnalyzer(BaseAnalyzer):
         """
         detections = []
 
-        if self._landmarker is None:
+        if self._model_signature is None:
             self.setup()
+            if self._model_signature is None:
+                return detections
 
-        # Converte BGR para RGB
-        rgb_frame = frame[:, :, ::-1].copy()
+        # Preprocessa e adiciona ao buffer
+        processed_frame = self._preprocess_frame(frame)
+        self._frame_buffer.append(processed_frame)
 
-        # Cria imagem MediaPipe
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        # Mantem apenas os ultimos N frames
+        if len(self._frame_buffer) > self.FRAMES_PER_PREDICTION:
+            self._frame_buffer.pop(0)
 
-        # Processa o frame
-        results = self._landmarker.detect(mp_image)
+        # Faz predicao quando tiver frames suficientes
+        if len(self._frame_buffer) >= self.FRAMES_PER_PREDICTION // 2:
+            activity, confidence = self._predict_activity()
 
-        if results.pose_landmarks and len(results.pose_landmarks) > 0:
+            # Atualiza ultima predicao se confianca for maior
+            if confidence >= self._min_confidence:
+                self._last_prediction = activity
+                self._last_confidence = confidence
+
+        # Retorna deteccao se tiver predicao valida
+        if self._last_prediction and self._last_confidence >= self._min_confidence:
             self._activity_counter += 1
-
-            # Pega os landmarks da primeira pose detectada
-            landmarks = results.pose_landmarks[0]
-
-            # Classifica a atividade
-            raw_activity, confidence = self._classify_activity(landmarks)
-
-            # Aplica suavizacao temporal para evitar flickering
-            activity = self._get_smoothed_activity(raw_activity)
-
-            # Calcula velocidade e angulos para deteccao de anomalias
-            velocity = self._calculate_landmarks_velocity(landmarks)
-            angles = self._calculate_body_angles(landmarks)
-
-            # Detecta anomalias
-            is_anomaly, anomaly_type = self._detect_anomaly(velocity, angles)
 
             detection = ActivityDetection(
                 activity_id=self._activity_counter,
-                activity=activity,
-                activity_label=ACTIVITY_LABELS.get(activity, activity),
-                confidence=confidence,
+                activity=self._last_prediction,
+                activity_label=self._get_portuguese_label(self._last_prediction),
+                confidence=self._last_confidence,
                 frame_number=frame_number,
-                landmarks_velocity=velocity,
-                pose_angles=angles,
-                is_anomaly=is_anomaly,
-                anomaly_type=anomaly_type
+                landmarks_velocity=0.0,
+                pose_angles={},
+                is_anomaly=False,
+                anomaly_type=""
             )
             detections.append(detection)
-
-            # Armazena landmarks para o proximo frame
-            self._prev_landmarks = landmarks
 
         return detections
 
     def teardown(self) -> None:
         """Libera recursos."""
-        self._landmarker = None
-        self._activity_history.clear()
-        self._prev_landmarks = None
+        self._model = None
+        self._frame_buffer = []
         logger.info(f"ActivityAnalyzer finalizado. Total: {self._activity_counter} deteccoes")

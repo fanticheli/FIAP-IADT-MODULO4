@@ -7,3 +7,4 @@ tqdm>=4.65.0
 fpdf2>=2.7.0
 deepface>=0.0.89
 tf-keras>=2.16.0
+tensorflow-hub>=0.16.0

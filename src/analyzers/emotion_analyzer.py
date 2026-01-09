@@ -20,6 +20,12 @@ EMOTION_LABELS = {
     "neutral": "Neutro"
 }
 
+# Tamanho minimo do rosto em pixels (largura e altura)
+MIN_FACE_SIZE = 30
+
+# Confianca minima do rosto detectado
+MIN_FACE_CONFIDENCE = 0.5
+
 
 class EmotionAnalyzer(BaseAnalyzer):
     """
@@ -75,24 +81,39 @@ class EmotionAnalyzer(BaseAnalyzer):
                 results = [results]
 
             for result in results:
-                self._emotion_counter += 1
-
                 emotions = result.get("emotion", {})
                 region = result.get("region", {})
 
+                # Bounding box
+                x = region.get("x", 0)
+                y = region.get("y", 0)
+                w = region.get("w", 0)
+                h = region.get("h", 0)
+
+                # Valida se o rosto detectado e real
+                # 1. Bounding box deve ter tamanho minimo
+                if w < MIN_FACE_SIZE or h < MIN_FACE_SIZE:
+                    continue
+
+                # 2. Bounding box deve estar dentro do frame
+                frame_h, frame_w = frame.shape[:2]
+                if x < 0 or y < 0 or x + w > frame_w or y + h > frame_h:
+                    continue
+
+                # 3. Verifica confianca do rosto (se disponivel)
+                face_confidence = result.get("face_confidence", 1.0)
+                if face_confidence < MIN_FACE_CONFIDENCE:
+                    continue
+
                 if emotions:
+                    self._emotion_counter += 1
+
                     # Pega a emocao dominante
                     dominant = result.get("dominant_emotion", "neutral")
                     confidence = emotions.get(dominant, 0) / 100
 
                     # Conta emocoes
                     self._emotion_counts[dominant] = self._emotion_counts.get(dominant, 0) + 1
-
-                    # Bounding box
-                    x = region.get("x", 0)
-                    y = region.get("y", 0)
-                    w = region.get("w", 0)
-                    h = region.get("h", 0)
 
                     detection = EmotionDetection(
                         emotion_id=self._emotion_counter,
