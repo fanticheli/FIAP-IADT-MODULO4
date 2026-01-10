@@ -107,21 +107,9 @@ def main() -> int:
 
     # Obtém resumo e anomalias
     summary = result.get_summary()
-    anomalias = summary.get('anomalias', [])
-
-    # Extrai frames das anomalias
-    imagens_anomalias = []
-    if anomalias:
-        logger.info("Extraindo frames de anomalias...")
-        imagens_anomalias = extrair_frames_anomalias(
-            video_path=args.input,
-            anomalias=anomalias,
-            output_dir=output_dir,
-            max_frames=3
-        )
 
     # Gera relatório PDF
-    gerar_relatorio_pdf(summary, output_pdf_path, imagens_anomalias)
+    gerar_relatorio_pdf(summary, output_pdf_path)
 
     # Exibe resumo no console
     logger.info("=" * 60)

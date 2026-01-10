@@ -79,16 +79,6 @@ logs/
 # Models (downloaded automatically)
 models/*.tflite
 
-# Output / Results
-resultado/
-output/
-
-# Videos (large files)
-videos/*.mp4
-videos/*.avi
-videos/*.mov
-videos/*.mkv
-
 # Environment variables
 .env
 .env.local

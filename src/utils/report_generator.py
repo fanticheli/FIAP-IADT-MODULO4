@@ -9,8 +9,7 @@ from fpdf import FPDF
 
 def gerar_relatorio_pdf(
     summary: dict,
-    output_path: Path,
-    imagens_anomalias: list[Path] = None
+    output_path: Path
 ) -> None:
     """
     Gera relatorio PDF com os resultados da analise.
@@ -147,19 +146,5 @@ def gerar_relatorio_pdf(
     else:
         pdf.set_font("Helvetica", "I", 10)
         pdf.cell(0, 6, "  (Em desenvolvimento)", ln=True)
-
-    # === IMAGENS DAS ANOMALIAS ===
-    if imagens_anomalias:
-        pdf.add_page()
-        pdf.set_font("Helvetica", "B", 14)
-        pdf.cell(0, 10, "Anexo: Frames com Anomalias", ln=True)
-
-        for img_path in imagens_anomalias:
-            if img_path.exists():
-                pdf.ln(5)
-                pdf.set_font("Helvetica", "", 9)
-                pdf.cell(0, 5, f"Frame: {img_path.stem}", ln=True)
-                pdf.image(str(img_path), x=10, w=190)
-                pdf.ln(3)
 
     pdf.output(output_path)
